@@ -3,7 +3,7 @@
 //! ```text
 //! ws_audio_handler
 //!   └─ handle_audio_connection
-//!        ├─ send challenge, await auth (5s timeout)
+//!        ├─ send challenge, await configured auth timeout
 //!        ├─ ensure_membership (auto-add for ephemeral channels)
 //!        ├─ room.add_peer → broadcast joined
 //!        ├─ spawn send_loop + heartbeat_loop
@@ -56,9 +56,6 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Missed pong limit before disconnect.
 const MAX_MISSED_PONGS: u8 = 3;
-
-/// Auth timeout.
-const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// WebSocket upgrade handler for `/huddle/:channel_id/audio`.
 pub async fn ws_audio_handler(
@@ -187,7 +184,7 @@ async fn handle_active_audio_connection(
     let auth_result = tokio::select! {
         biased;
         _ = cancel.cancelled() => return,
-        result = tokio::time::timeout(AUTH_TIMEOUT, async {
+        result = tokio::time::timeout(state.config.auth_timeout, async {
             while let Some(Ok(msg)) = ws_recv.next().await {
                 if let WsMessage::Text(text) = msg {
                     if text.len() > MAX_TEXT_FRAME_BYTES {

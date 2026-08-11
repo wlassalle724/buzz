@@ -113,6 +113,8 @@ pub struct Config {
     pub max_frame_bytes: usize,
     /// Number of consecutive buffer-full events tolerated before cancelling a slow client.
     pub slow_client_grace_limit: u8,
+    /// Maximum time a new WebSocket may wait for NIP-42 authentication.
+    pub auth_timeout: Duration,
     /// Authentication provider configuration.
     pub auth: buzz_auth::AuthConfig,
     /// Whether REST API requests must present a valid token. Independent of
@@ -579,6 +581,9 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(15);
 
+        let auth_timeout =
+            Duration::from_secs(positive_u64_from_env("BUZZ_AUTH_TIMEOUT_SECS", 60)?);
+
         let require_auth_token = std::env::var("BUZZ_REQUIRE_AUTH_TOKEN")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
@@ -1003,6 +1008,7 @@ impl Config {
             send_buffer_size,
             max_frame_bytes,
             slow_client_grace_limit,
+            auth_timeout,
             auth,
             require_auth_token,
             cors_origins,
@@ -1120,6 +1126,7 @@ mod tests {
         assert!(config.send_buffer_size > 0);
         assert_eq!(config.max_frame_bytes, DEFAULT_MAX_FRAME_BYTES);
         assert!(config.slow_client_grace_limit > 0);
+        assert_eq!(config.auth_timeout, Duration::from_secs(60));
         assert!(
             !config.pubkey_allowlist_enabled,
             "pubkey_allowlist_enabled should default to false"
@@ -1157,6 +1164,31 @@ mod tests {
             config.huddle_audio_available,
             "huddle_audio_available should default to true so single-pod (N=1) keeps today's huddle behavior"
         );
+    }
+
+    #[test]
+    fn auth_timeout_env_override_is_strict() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let previous = std::env::var_os("BUZZ_AUTH_TIMEOUT_SECS");
+
+        std::env::set_var("BUZZ_AUTH_TIMEOUT_SECS", "120");
+        let overridden = Config::from_env().expect("config").auth_timeout;
+
+        std::env::set_var("BUZZ_AUTH_TIMEOUT_SECS", "0");
+        let zero = Config::from_env();
+
+        std::env::set_var("BUZZ_AUTH_TIMEOUT_SECS", "not-a-number");
+        let junk = Config::from_env();
+
+        if let Some(value) = previous {
+            std::env::set_var("BUZZ_AUTH_TIMEOUT_SECS", value);
+        } else {
+            std::env::remove_var("BUZZ_AUTH_TIMEOUT_SECS");
+        }
+
+        assert_eq!(overridden, Duration::from_secs(120));
+        assert!(matches!(zero, Err(ConfigError::InvalidValue(_))));
+        assert!(matches!(junk, Err(ConfigError::InvalidValue(_))));
     }
 
     #[test]
