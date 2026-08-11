@@ -65,13 +65,11 @@ jobs:
           CMAKE_OSX_DEPLOYMENT_TARGET: "10.15"
         run: cd desktop && pnpm tauri build --verbose --no-sign
 
-      - name: Verify bundled sidecars and stage artifacts
+      - name: Verify, ad-hoc sign, and stage artifacts
         run: |
           set -euo pipefail
           app="desktop/src-tauri/target/release/bundle/macos/Buzz.app"
-          dmg="$(find desktop/src-tauri/target/release/bundle/dmg -name '*.dmg' -type f | head -1)"
           test -d "$app"
-          test -s "$dmg"
           for sidecar in buzz buzz-acp buzz-agent buzz-backend-kubernetes buzz-dev-mcp git-credential-nostr; do
             bundled="$app/Contents/MacOS/$sidecar"
             test -s "$bundled"
@@ -79,18 +77,26 @@ jobs:
             file "$bundled" | tee -a bundled-sidecar-verification.txt
             file "$bundled" | grep -q 'Mach-O 64-bit executable arm64'
           done
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
           mkdir -p dist
-          cp "$dmg" dist/Buzz_0.5.9_aarch64-native-roots-jls.1.dmg
-          ditto -c -k --sequesterRsrc --keepParent "$app" dist/Buzz_0.5.9_aarch64-native-roots-jls.1.zip
+          ditto -c -k --sequesterRsrc --keepParent "$app" dist/Buzz_0.5.9_aarch64-native-roots-jls.2.zip
+          hdiutil create \
+            -volname "Buzz 0.5.9 JLS.2" \
+            -srcfolder "$app" \
+            -ov \
+            -format UDZO \
+            dist/Buzz_0.5.9_aarch64-native-roots-jls.2.dmg
+          hdiutil verify dist/Buzz_0.5.9_aarch64-native-roots-jls.2.dmg
           (
             cd dist
-            shasum -a 256 Buzz_0.5.9_aarch64-native-roots-jls.1.dmg Buzz_0.5.9_aarch64-native-roots-jls.1.zip > SHA256SUMS
+            shasum -a 256 Buzz_0.5.9_aarch64-native-roots-jls.2.dmg Buzz_0.5.9_aarch64-native-roots-jls.2.zip > SHA256SUMS
           )
           cp sidecar-verification.txt bundled-sidecar-verification.txt dist/
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: Buzz-0.5.9-aarch64-native-roots-jls.1
+          name: Buzz-0.5.9-aarch64-native-roots-jls.2
           path: dist/
           if-no-files-found: error
           retention-days: 14
