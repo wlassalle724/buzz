@@ -1,0 +1,89 @@
+name: JLS desktop arm64 candidate
+
+on:
+  push:
+    branches:
+      - jls/desktop-v0.5.9-native-roots
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+
+      - name: Build and bundle sidecars
+        run: |
+          cargo build --release \
+            -p buzz-acp \
+            -p buzz-agent \
+            -p buzz-backend-kubernetes \
+            -p buzz-dev-mcp \
+            -p git-credential-nostr \
+            -p buzz-cli
+          ./scripts/bundle-sidecars.sh
+
+      - name: Verify sidecars
+        run: |
+          set -euo pipefail
+          target="aarch64-apple-darwin"
+          sidecars=(
+            buzz
+            buzz-acp
+            buzz-agent
+            buzz-backend-kubernetes
+            buzz-dev-mcp
+            git-credential-nostr
+          )
+          for sidecar in "${sidecars[@]}"; do
+            path="desktop/src-tauri/binaries/${sidecar}-${target}"
+            test -s "$path"
+            test -x "$path"
+            file "$path" | tee -a sidecar-verification.txt
+            file "$path" | grep -q 'Mach-O 64-bit executable arm64'
+          done
+
+      - name: Build unsigned desktop candidate
+        env:
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+          CMAKE_OSX_DEPLOYMENT_TARGET: "10.15"
+        run: cd desktop && pnpm tauri build --verbose --no-sign
+
+      - name: Verify bundled sidecars and stage artifacts
+        run: |
+          set -euo pipefail
+          app="desktop/src-tauri/target/release/bundle/macos/Buzz.app"
+          dmg="$(find desktop/src-tauri/target/release/bundle/dmg -name '*.dmg' -type f | head -1)"
+          test -d "$app"
+          test -s "$dmg"
+          for sidecar in buzz buzz-acp buzz-agent buzz-backend-kubernetes buzz-dev-mcp git-credential-nostr; do
+            bundled="$app/Contents/MacOS/$sidecar"
+            test -s "$bundled"
+            test -x "$bundled"
+            file "$bundled" | tee -a bundled-sidecar-verification.txt
+            file "$bundled" | grep -q 'Mach-O 64-bit executable arm64'
+          done
+          mkdir -p dist
+          cp "$dmg" dist/Buzz_0.5.9_aarch64-native-roots-jls.1.dmg
+          ditto -c -k --sequesterRsrc --keepParent "$app" dist/Buzz_0.5.9_aarch64-native-roots-jls.1.zip
+          shasum -a 256 dist/* > dist/SHA256SUMS
+          cp sidecar-verification.txt bundled-sidecar-verification.txt dist/
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Buzz-0.5.9-aarch64-native-roots-jls.1
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
